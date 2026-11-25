@@ -1,0 +1,75 @@
+From fe81185f73863c3393de2d49284bb220b51fbc05 Mon Sep 17 00:00:00 2001
+From: Argonaut engineering <argonaut-engineering@users.noreply.github.com>
+Date: Wed, 25 Nov 2026 15:45:24 +0000
+Subject: [PATCH] Fix signed INT8 dot promotion on non-MMA CUDA targets
+
+Use signed integer extension for i8-to-i32 promotion in the scalar FMA path. Add SM61-specific regression coverage with signed inputs, a nonzero accumulator, two tile shapes, and both physical GPUs where available.
+---
+ .../TritonGPU/Transforms/AccelerateMatmul.cpp |  3 ++
+ .../unit/language/test_pascal_int8_dot.py     | 40 +++++++++++++++++++
+ 2 files changed, 43 insertions(+)
+ create mode 100644 python/test/unit/language/test_pascal_int8_dot.py
+
+diff --git a/lib/Dialect/TritonGPU/Transforms/AccelerateMatmul.cpp b/lib/Dialect/TritonGPU/Transforms/AccelerateMatmul.cpp
+index 23972ff31..c933f6a9e 100644
+--- a/lib/Dialect/TritonGPU/Transforms/AccelerateMatmul.cpp
++++ b/lib/Dialect/TritonGPU/Transforms/AccelerateMatmul.cpp
+@@ -970,6 +970,9 @@ static Value promoteOperand(OpBuilder &builder, Location loc, Value operand,
+   if (type::isFloat8(operandElType)) {
+     return FpToFpOp::create(builder, loc, tensorPromotedType, operand);
+   }
++  // Signed i8 dot on the pre-MMA path must widen integers, not floats.
++  if (operandElType.isInteger(8) && promotedType.isInteger(32))
++    return arith::ExtSIOp::create(builder, loc, tensorPromotedType, operand);
+   return arith::ExtFOp::create(builder, loc, tensorPromotedType, operand);
+ }
+ 
+diff --git a/python/test/unit/language/test_pascal_int8_dot.py b/python/test/unit/language/test_pascal_int8_dot.py
+new file mode 100644
+index 000000000..065a421df
+--- /dev/null
++++ b/python/test/unit/language/test_pascal_int8_dot.py
+@@ -0,0 +1,40 @@
++"""Regression for signed int8 dot lowering on NVIDIA SM61 (no MMA)."""
++import pytest
++import torch
++import triton
++import triton.language as tl
++
++
++@triton.jit
++def _signed_dot(a, b, c, out, M: tl.constexpr, N: tl.constexpr, K: tl.constexpr):
++    m = tl.arange(0, M)
++    n = tl.arange(0, N)
++    k = tl.arange(0, K)
++    lhs = tl.load(a + m[:, None] * K + k[None, :])
++    rhs = tl.load(b + k[:, None] * N + n[None, :])
++    acc = tl.load(c + m[:, None] * N + n[None, :])
++    result = tl.dot(lhs, rhs, acc, out_dtype=tl.int32)
++    tl.store(out + m[:, None] * N + n[None, :], result)
++
++
++@pytest.mark.parametrize("m,n,k", [(32, 32, 32), (32, 64, 64)])
++@pytest.mark.parametrize("num_warps", [4, 8])
++def test_pascal_signed_int8_dot(m, n, k, num_warps):
++    if not torch.cuda.is_available() or torch.version.cuda is None:
++        pytest.skip("requires NVIDIA CUDA")
++    devices = [i for i in range(torch.cuda.device_count()) if torch.cuda.get_device_capability(i) == (6, 1)]
++    if not devices:
++        pytest.skip("requires NVIDIA SM61")
++    rng = torch.Generator().manual_seed(123)
++    a = torch.randint(-128, 128, (m, k), dtype=torch.int8, generator=rng)
++    b = torch.randint(-128, 128, (k, n), dtype=torch.int8, generator=rng)
++    c = torch.randint(-4096, 4096, (m, n), dtype=torch.int32, generator=rng)
++    ref = a.to(torch.int32) @ b.to(torch.int32) + c
++    for i in devices:
++        with torch.cuda.device(i):
++            d = torch.device("cuda", i)
++            out = torch.empty_like(c, device=d)
++            kernel = _signed_dot[(1,)](a.to(d), b.to(d), c.to(d), out, m, n, k, num_warps=num_warps)
++            torch.cuda.synchronize(d)
++            torch.testing.assert_close(out.cpu(), ref, atol=0, rtol=0)
++            assert ".target sm_61" in kernel.asm["ptx"]
+-- 
+2.43.0
+

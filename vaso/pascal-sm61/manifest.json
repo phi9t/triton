@@ -1,0 +1,45 @@
+{
+  "schema_version": 1,
+  "purpose": "Replay the qualified Pascal SM61 patch set on its pinned Triton source; this support branch does not qualify current upstream main.",
+  "source": {
+    "repository": "https://github.com/triton-lang/triton.git",
+    "base_commit": "675c59878aa2280b31f722aaf42b825fcee21de8",
+    "version": "3.8.0"
+  },
+  "patches": [
+    {
+      "path": "0001-Fix-signed-INT8-dot-promotion-on-non-MMA-CUDA-targets.patch",
+      "original_commit": "fe81185f73863c3393de2d49284bb220b51fbc05",
+      "subject": "Fix signed INT8 dot promotion on non-MMA CUDA targets"
+    }
+  ],
+  "toolchain": {
+    "llvm_commit": "4611156032e1ebac68b2b8f6107b1475a7c60800",
+    "llvm_archive": "llvm-46111560-ubuntu-x64-1.tar.gz",
+    "llvm_archive_sha256": "38a3d11991211617c9e5200959c751540b8d0f8982dcbf23ac6b5468fd2ec909",
+    "cuda": "12.6",
+    "python_abi": "cp312",
+    "target": "sm_61",
+    "build_backends": [
+      "nvidia",
+      "amd"
+    ],
+    "proton": false
+  },
+  "qualified_wheel": {
+    "filename": "triton-3.8.0-cp312-cp312-linux_x86_64.whl",
+    "sha256": "c5bef0b016b61340bf1876769a679cf4bd27efb521cbb1d1944b4430929b1b09",
+    "publication": "Identity record only; wheel is not included in this directory."
+  },
+  "qualification_scope": {
+    "runtime": "standalone Insula",
+    "devices": "2 NVIDIA GeForce GTX 1070 Ti GPUs (SM61)",
+    "covered": [
+      "source-wheel compiler regressions including signed INT8 dot",
+      "Inkling operator and activation-quantization probes",
+      "reduced random-weight Inkling text model prefill and cached decoding"
+    ],
+    "full_production_checkpoint_qualified": false,
+    "current_upstream_main_qualified": false
+  }
+}
